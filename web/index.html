@@ -174,7 +174,7 @@
               fd.append("item_type", form.item_type);
               fd.append("fast_mode", form.fast_mode ? "true" : "false");
 
-              const r = await fetch("/api/predict", {
+              const r = await fetch("https://shiny-shape-b5e4.gestoru.workers.dev/api/predict", {
                 method: "POST",
                 body: fd,
               });
