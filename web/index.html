@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>Quick Size & Try-on (Vue Minimal)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 20px; }
+      h1 { font-size: 18px; margin: 0 0 16px; }
+      .card { border: 1px solid #ccc; border-radius: 8px; padding: 16px; max-width: 880px; }
+      .row { display: flex; gap: 16px; flex-wrap: wrap; }
+      .col { flex: 1 1 280px; min-width: 260px; }
+      label { display: block; font-size: 12px; margin: 8px 0 4px; }
+      input[type="number"], select, textarea { width: 100%; padding: 8px; box-sizing: border-box; }
+      input[type="file"] { width: 100%; }
+      button { padding: 10px 14px; cursor: pointer; }
+      .result { margin-top: 16px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .grid > div { border: 1px solid #ddd; border-radius: 6px; padding: 10px; }
+      pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+      .footer { margin-top: 10px; font-size: 12px; color: #666; }
+      .img-wrap { display: flex; justify-content: center; align-items: center; min-height: 160px; background: #fafafa; border: 1px dashed #ddd; border-radius: 6px; }
+      img { max-width: 100%; height: auto; display: block; }
+    </style>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="card">
+        <h1>사이즈 추천 + 간단 피팅 데모</h1>
+        <div class="row">
+          <div class="col">
+            <label>사용자 전신 사진</label>
+            <input type="file" accept="image/*" @change="onFile($event, 'person')" />
+            <label>의류 이미지</label>
+            <input type="file" accept="image/*" @change="onFile($event, 'cloth')" />
+          </div>
+          <div class="col">
+            <label>키 (cm)</label>
+            <input type="number" v-model.number="form.height_cm" min="100" max="250" />
+            <label>몸무게 (kg)</label>
+            <input type="number" v-model.number="form.weight_kg" min="25" max="250" />
+            <label>성별</label>
+            <select v-model="form.sex">
+              <option value="male">male</option>
+              <option value="female">female</option>
+            </select>
+            <label>선호 핏</label>
+            <select v-model="form.fit_pref">
+              <option value="snug">snug</option>
+              <option value="regular">regular</option>
+              <option value="loose">loose</option>
+            </select>
+            <label>아이템 타입</label>
+            <select v-model="form.item_type">
+              <option value="top">top</option>
+              <option value="bottom">bottom</option>
+            </select>
+            <label title="체크 해제 시 CatVTON 합성이 실행됩니다(느림)."><input type="checkbox" v-model="form.fast_mode" /> 빠른 모드(미리보기)</label>
+            <div style="margin-top:12px;">
+              <button :disabled="loading" @click="submit">
+                {{ loading ? '처리 중...' : '분석 + 피팅 실행' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="result" v-if="person_preview || cloth_preview">
+          <strong>입력 이미지(원본)</strong>
+          <div class="grid">
+            <div>
+              <div class="img-wrap">
+                <img v-if="person_preview" :src="person_preview" alt="원본 전신 사진" />
+                <span v-else>전신 사진 미선택</span>
+              </div>
+            </div>
+            <div>
+              <div class="img-wrap">
+                <img v-if="cloth_preview" :src="cloth_preview" alt="원본 의류 이미지" />
+                <span v-else>의류 이미지 미선택</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="result" v-if="error">
+          <div style="color:#b00020;">오류: {{ error }}</div>
+        </div>
+
+        <div class="result" v-if="resp">
+          <div class="grid">
+            <div>
+              <strong>치수 추정 & 사이즈 추천</strong>
+              <pre>{{ pretty({measures: resp.measures, recommend: resp.recommend}) }}</pre>
+            </div>
+            <div>
+              <strong>핏 분석</strong>
+              <pre>{{ resp.analysis }}</pre>
+            </div>
+          </div>
+          <div class="result">
+            <strong>간단 피팅 결과(시각화)</strong>
+            <div class="img-wrap">
+              <img v-if="resp.tryon_image_base64" :src="resp.tryon_image_base64" alt="tryon result" />
+              <span v-else>이미지 없음</span>
+            </div>
+            <div class="footer">처리 시간: {{ resp.runtime_ms }} ms</div>
+<div class="footer">엔진: {{ resp.tryon_engine || 'n/a' }}</div>
+<div v-if="resp.tryon_error" style="margin-top:6px;color:#b00020;">합성 오류: {{ resp.tryon_error }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, reactive } = Vue;
+
+      createApp({
+        setup() {
+          const form = reactive({
+            person_file: null,
+            cloth_file: null,
+            height_cm: 175,
+            weight_kg: 70,
+            sex: "male",
+            fit_pref: "regular",
+            item_type: "top",
+            fast_mode: false,
+          });
+          let loading = Vue.ref(false);
+          let resp = Vue.ref(null);
+          let error = Vue.ref("");
+          let person_preview = Vue.ref("");
+          let cloth_preview = Vue.ref("");
+          let _person_url = null;
+          let _cloth_url = null;
+
+          function onFile(e, key) {
+            const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+            if (key === "person") {
+              form.person_file = f;
+              if (_person_url) { URL.revokeObjectURL(_person_url); _person_url = null; }
+              person_preview.value = f ? (_person_url = URL.createObjectURL(f)) : "";
+            }
+            if (key === "cloth") {
+              form.cloth_file = f;
+              if (_cloth_url) { URL.revokeObjectURL(_cloth_url); _cloth_url = null; }
+              cloth_preview.value = f ? (_cloth_url = URL.createObjectURL(f)) : "";
+            }
+          }
+
+          function pretty(obj) {
+            try { return JSON.stringify(obj, null, 2); } catch (e) { return String(obj); }
+          }
+
+          async function submit() {
+            error.value = "";
+            resp.value = null;
+
+            if (!form.person_file || !form.cloth_file) {
+              error.value = "전신 사진과 의류 이미지를 둘 다 업로드 해주세요.";
+              return;
+            }
+            loading.value = true;
+            try {
+              const fd = new FormData();
+              fd.append("person_image", form.person_file);
+              fd.append("cloth_image", form.cloth_file);
+              fd.append("height_cm", String(form.height_cm));
+              fd.append("weight_kg", String(form.weight_kg));
+              fd.append("sex", form.sex);
+              fd.append("fit_pref", form.fit_pref);
+              fd.append("item_type", form.item_type);
+              fd.append("fast_mode", form.fast_mode ? "true" : "false");
+
+              const r = await fetch("/api/predict", {
+                method: "POST",
+                body: fd,
+              });
+              if (!r.ok) {
+                const t = await r.text();
+                throw new Error(`API 오류 (${r.status}): ${t}`);
+              }
+              resp.value = await r.json();
+            } catch (e) {
+              error.value = e?.message || String(e);
+            } finally {
+              loading.value = false;
+            }
+          }
+
+          return { form, loading, resp, error, onFile, submit, pretty, person_preview, cloth_preview };
+        },
+      }).mount("#app");
+    </script>
+  </body>
+</html>
