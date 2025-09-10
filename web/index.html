@@ -2,17 +2,17 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <title>Quick Size & Try-on (Vue Minimal)</title>
+    <title>Quick Size & Try-on (Direct RunPod)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       :root { color-scheme: light dark; }
       body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 20px; }
       h1 { font-size: 18px; margin: 0 0 16px; }
-      .card { border: 1px solid #ccc; border-radius: 8px; padding: 16px; max-width: 880px; }
+      .card { border: 1px solid #ccc; border-radius: 8px; padding: 16px; max-width: 880px; margin-bottom: 16px; }
       .row { display: flex; gap: 16px; flex-wrap: wrap; }
       .col { flex: 1 1 280px; min-width: 260px; }
       label { display: block; font-size: 12px; margin: 8px 0 4px; }
-      input[type="number"], select, textarea { width: 100%; padding: 8px; box-sizing: border-box; }
+      input[type="number"], input[type="text"], input[type="password"], select, textarea { width: 100%; padding: 8px; box-sizing: border-box; }
       input[type="file"] { width: 100%; }
       button { padding: 10px 14px; cursor: pointer; }
       .result { margin-top: 16px; }
@@ -22,11 +22,76 @@
       .footer { margin-top: 10px; font-size: 12px; color: #666; }
       .img-wrap { display: flex; justify-content: center; align-items: center; min-height: 160px; background: #fafafa; border: 1px dashed #ddd; border-radius: 6px; }
       img { max-width: 100%; height: auto; display: block; }
+      .api-status { 
+        padding: 8px 12px; 
+        border-radius: 4px; 
+        margin-bottom: 12px;
+        font-size: 13px;
+      }
+      .api-status.configured { 
+        background-color: #d4edda; 
+        border: 1px solid #c3e6cb; 
+        color: #155724; 
+      }
+      .api-status.not-configured { 
+        background-color: #f8d7da; 
+        border: 1px solid #f5c6cb; 
+        color: #721c24; 
+      }
+      .api-form { 
+        display: flex; 
+        gap: 8px; 
+        align-items: flex-end;
+        flex-wrap: wrap;
+      }
+      .api-form > div { flex: 1; min-width: 200px; }
+      .api-form button { margin-bottom: 0; white-space: nowrap; }
+      .status-info {
+        padding: 8px;
+        border-radius: 4px;
+        margin-top: 8px;
+        font-size: 12px;
+        background: #f0f0f0;
+      }
     </style>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   </head>
   <body>
     <div id="app">
+      <!-- API Configuration Card -->
+      <div class="card">
+        <h1>RunPod API 설정</h1>
+        <div class="api-status" :class="apiConfigured ? 'configured' : 'not-configured'">
+          {{ apiConfigured ? '✓ API 설정 완료' : '⚠ API 키를 입력해주세요' }}
+        </div>
+        <div class="api-form">
+          <div>
+            <label>RunPod API Key</label>
+            <input 
+              type="password" 
+              v-model="apiSettings.RUNPOD_API_KEY" 
+              placeholder="runpod_..."
+              @input="onApiChange"
+            />
+          </div>
+          <div>
+            <label>RunPod Endpoint ID</label>
+            <input 
+              type="text" 
+              v-model="apiSettings.RUNPOD_ENDPOINT_ID" 
+              placeholder="endpoint_id"
+              @input="onApiChange"
+            />
+          </div>
+          <button @click="saveApiSettings">저장</button>
+          <button @click="clearApiSettings">초기화</button>
+        </div>
+        <div class="status-info" v-if="apiSaveMessage">
+          {{ apiSaveMessage }}
+        </div>
+      </div>
+
+      <!-- Main Application Card -->
       <div class="card">
         <h1>사이즈 추천 + 간단 피팅 데모</h1>
         <div class="row">
@@ -59,7 +124,7 @@
             </select>
             <label title="체크 해제 시 CatVTON 합성이 실행됩니다(느림)."><input type="checkbox" v-model="form.fast_mode" /> 빠른 모드(미리보기)</label>
             <div style="margin-top:12px;">
-              <button :disabled="loading" @click="submit">
+              <button :disabled="loading || !apiConfigured" @click="submit">
                 {{ loading ? '처리 중...' : '분석 + 피팅 실행' }}
               </button>
             </div>
@@ -80,6 +145,15 @@
                 <img v-if="cloth_preview" :src="cloth_preview" alt="원본 의류 이미지" />
                 <span v-else>의류 이미지 미선택</span>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="result" v-if="status">
+          <div class="status-info">
+            <strong>상태:</strong> {{ status }}
+            <div v-if="jobId" style="margin-top: 4px;">
+              <strong>Job ID:</strong> {{ jobId }}
             </div>
           </div>
         </div>
@@ -106,18 +180,54 @@
               <span v-else>이미지 없음</span>
             </div>
             <div class="footer">처리 시간: {{ resp.runtime_ms }} ms</div>
-<div class="footer">엔진: {{ resp.tryon_engine || 'n/a' }}</div>
-<div v-if="resp.tryon_error" style="margin-top:6px;color:#b00020;">합성 오류: {{ resp.tryon_error }}</div>
+            <div class="footer">엔진: {{ resp.tryon_engine || 'n/a' }}</div>
+            <div v-if="resp.tryon_error" style="margin-top:6px;color:#b00020;">합성 오류: {{ resp.tryon_error }}</div>
           </div>
         </div>
       </div>
     </div>
 
     <script>
-      const { createApp, reactive } = Vue;
+      const { createApp, reactive, computed } = Vue;
 
       createApp({
         setup() {
+          // API Settings - loaded from localStorage
+          const apiSettings = reactive({
+            RUNPOD_API_KEY: localStorage.getItem('runpod_api_key') || '',
+            RUNPOD_ENDPOINT_ID: localStorage.getItem('runpod_endpoint_id') || '',
+          });
+
+          const apiConfigured = computed(() => {
+            return apiSettings.RUNPOD_API_KEY && apiSettings.RUNPOD_ENDPOINT_ID;
+          });
+
+          let apiSaveMessage = Vue.ref('');
+
+          function saveApiSettings() {
+            localStorage.setItem('runpod_api_key', apiSettings.RUNPOD_API_KEY);
+            localStorage.setItem('runpod_endpoint_id', apiSettings.RUNPOD_ENDPOINT_ID);
+            apiSaveMessage.value = '✓ API 설정이 저장되었습니다.';
+            setTimeout(() => {
+              apiSaveMessage.value = '';
+            }, 3000);
+          }
+
+          function clearApiSettings() {
+            apiSettings.RUNPOD_API_KEY = '';
+            apiSettings.RUNPOD_ENDPOINT_ID = '';
+            localStorage.removeItem('runpod_api_key');
+            localStorage.removeItem('runpod_endpoint_id');
+            apiSaveMessage.value = 'API 설정이 초기화되었습니다.';
+            setTimeout(() => {
+              apiSaveMessage.value = '';
+            }, 3000);
+          }
+
+          function onApiChange() {
+            apiSaveMessage.value = '';
+          }
+
           const form = reactive({
             person_file: null,
             cloth_file: null,
@@ -128,9 +238,12 @@
             item_type: "top",
             fast_mode: false,
           });
+
           let loading = Vue.ref(false);
           let resp = Vue.ref(null);
           let error = Vue.ref("");
+          let status = Vue.ref("");
+          let jobId = Vue.ref("");
           let person_preview = Vue.ref("");
           let cloth_preview = Vue.ref("");
           let _person_url = null;
@@ -154,43 +267,155 @@
             try { return JSON.stringify(obj, null, 2); } catch (e) { return String(obj); }
           }
 
+          // Convert file to base64 in chunks to avoid stack overflow
+          async function fileToBase64Chunked(file) {
+            return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const base64 = reader.result.split(',')[1];
+                resolve(base64);
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+            });
+          }
+
+          async function callRunPodServerless(payload) {
+            const url = `https://api.runpod.ai/v2/${apiSettings.RUNPOD_ENDPOINT_ID}/run`;
+            
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiSettings.RUNPOD_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ input: payload })
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`RunPod API error (${response.status}): ${errorText}`);
+            }
+
+            const result = await response.json();
+            
+            if (result.id) {
+              return result.id;
+            } else {
+              throw new Error('No job ID returned from RunPod');
+            }
+          }
+
+          async function checkJobStatus(jobId) {
+            const url = `https://api.runpod.ai/v2/${apiSettings.RUNPOD_ENDPOINT_ID}/status/${jobId}`;
+            
+            const response = await fetch(url, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${apiSettings.RUNPOD_API_KEY}`,
+              }
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`Status check error (${response.status}): ${errorText}`);
+            }
+
+            return await response.json();
+          }
+
+          async function waitForCompletion(jobId, maxAttempts = 60, delayMs = 2000) {
+            for (let i = 0; i < maxAttempts; i++) {
+              const result = await checkJobStatus(jobId);
+              
+              if (result.status === 'COMPLETED') {
+                return result.output;
+              } else if (result.status === 'FAILED') {
+                throw new Error(`Job failed: ${result.error || 'Unknown error'}`);
+              }
+              
+              status.value = `Job ${result.status || 'IN_QUEUE'}... (${i + 1}/${maxAttempts})`;
+              
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+            
+            throw new Error('Job timeout - exceeded maximum attempts');
+          }
+
           async function submit() {
             error.value = "";
             resp.value = null;
+            status.value = "";
+            jobId.value = "";
+
+            if (!apiConfigured.value) {
+              error.value = "RunPod API 키와 Endpoint ID를 먼저 설정해주세요.";
+              return;
+            }
 
             if (!form.person_file || !form.cloth_file) {
               error.value = "전신 사진과 의류 이미지를 둘 다 업로드 해주세요.";
               return;
             }
+
             loading.value = true;
             try {
-              const fd = new FormData();
-              fd.append("person_image", form.person_file);
-              fd.append("cloth_image", form.cloth_file);
-              fd.append("height_cm", String(form.height_cm));
-              fd.append("weight_kg", String(form.weight_kg));
-              fd.append("sex", form.sex);
-              fd.append("fit_pref", form.fit_pref);
-              fd.append("item_type", form.item_type);
-              fd.append("fast_mode", form.fast_mode ? "true" : "false");
+              status.value = "이미지를 Base64로 변환 중...";
+              
+              const personBase64 = await fileToBase64Chunked(form.person_file);
+              const clothBase64 = await fileToBase64Chunked(form.cloth_file);
 
-              const r = await fetch("https://shiny-shape-b5e4.gestoru.workers.dev/api/predict", {
-                method: "POST",
-                body: fd,
-              });
-              if (!r.ok) {
-                const t = await r.text();
-                throw new Error(`API 오류 (${r.status}): ${t}`);
-              }
-              resp.value = await r.json();
+              const payload = {
+                person_image_base64: personBase64,
+                cloth_image_base64: clothBase64,
+                height_cm: form.height_cm,
+                weight_kg: form.weight_kg,
+                sex: form.sex,
+                fit_pref: form.fit_pref,
+                item_type: form.item_type,
+                fast_mode: form.fast_mode
+              };
+
+              status.value = "RunPod 작업 생성 중...";
+              const jobIdResult = await callRunPodServerless(payload);
+              jobId.value = jobIdResult;
+              
+              status.value = "작업 처리 대기 중...";
+              const output = await waitForCompletion(jobIdResult);
+              
+              resp.value = output;
+              status.value = "완료!";
+              setTimeout(() => {
+                status.value = "";
+                jobId.value = "";
+              }, 3000);
             } catch (e) {
               error.value = e?.message || String(e);
+              status.value = "";
             } finally {
               loading.value = false;
             }
           }
 
-          return { form, loading, resp, error, onFile, submit, pretty, person_preview, cloth_preview };
+          return { 
+            form, 
+            loading, 
+            resp, 
+            error, 
+            status,
+            jobId,
+            onFile, 
+            submit, 
+            pretty, 
+            person_preview, 
+            cloth_preview,
+            apiSettings,
+            apiConfigured,
+            apiSaveMessage,
+            saveApiSettings,
+            clearApiSettings,
+            onApiChange
+          };
         },
       }).mount("#app");
     </script>
